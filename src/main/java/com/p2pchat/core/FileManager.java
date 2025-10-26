@@ -1,209 +1,248 @@
 package com.p2pchat.core;
 
-import com.p2pchat.core.models.Message;
+import com.p2pchat.storage.MySQLStorage;
 import java.io.*;
 import java.nio.file.*;
-import java.util.UUID;
+import java.nio.file.attribute.FileTime;
+import java.time.LocalDateTime;
+import java.util.*;
 
 public class FileManager {
-    private static final String BASE_STORAGE_PATH = "chat_files/";
-    private static final int MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB limit
+    private static final String BASE_STORAGE_PATH = "p2pchat_files/";
+    private static final Set<String> SUPPORTED_EXTENSIONS = Set.of(
+        "txt", "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+        "jpg", "jpeg", "png", "gif", "bmp", "svg",
+        "mp3", "wav", "ogg",
+        "mp4", "avi", "mkv", "mov",
+        "zip", "rar", "7z"
+    );
     
-    static {
-        // Create storage directories when class is loaded
-        createStorageDirectories();
+    private MySQLStorage storage;
+    
+    public FileManager(MySQLStorage storage) {
+        this.storage = storage;
+        initializeStorage();
+    }
+    
+    private void initializeStorage() {
+        try {
+            Path storagePath = Paths.get(BASE_STORAGE_PATH);
+            if (!Files.exists(storagePath)) {
+                Files.createDirectories(storagePath);
+                Files.createDirectories(storagePath.resolve("sent"));
+                Files.createDirectories(storagePath.resolve("received"));
+                Files.createDirectories(storagePath.resolve("temp"));
+            }
+        } catch (IOException e) {
+            System.err.println("❌ Failed to initialize file storage: " + e.getMessage());
+        }
+    }
+    
+    public static String getSupportedExtensions() {
+        return String.join(", ", SUPPORTED_EXTENSIONS);
+    }
+    
+    public FileMeta saveFile(File file, String ownerPhone) throws IOException {
+        if (!file.exists()) {
+            throw new FileNotFoundException("File not found: " + file.getAbsolutePath());
+        }
+        
+        String fileExtension = getFileExtension(file.getName());
+        if (!SUPPORTED_EXTENSIONS.contains(fileExtension.toLowerCase())) {
+            throw new IllegalArgumentException("Unsupported file type: " + fileExtension);
+        }
+        
+        String fileId = UUID.randomUUID().toString();
+        String safeFileName = fileId + "_" + sanitizeFileName(file.getName());
+        Path targetPath = Paths.get(BASE_STORAGE_PATH, "sent", safeFileName);
+        
+        // Create directories if they don't exist
+        Files.createDirectories(targetPath.getParent());
+        
+        // Copy file to storage
+        Files.copy(file.toPath(), targetPath, StandardCopyOption.REPLACE_EXISTING);
+        
+        FileMeta meta = new FileMeta(
+            fileId,
+            file.getName(),
+            targetPath.toString(),
+            file.length(),
+            fileExtension,
+            ownerPhone,
+            LocalDateTime.now()
+        );
+        
+        // Save file metadata to database (NO CHUNK DATA)
+        if (storage != null) {
+            try {
+                boolean saved = storage.saveFileMetadata(fileId, file.getName(), targetPath.toString(), 
+                                   file.length(), fileExtension, ownerPhone);
+                if (saved) {
+                    System.out.println("✅ File metadata saved to database");
+                } else {
+                    System.err.println("❌ Failed to save file metadata");
+                }
+            } catch (Exception e) {
+                System.err.println("❌ Error saving file metadata: " + e.getMessage());
+                // Continue even if metadata save fails - file is still saved locally
+            }
+        }
+        
+        System.out.println("✅ File saved locally: " + file.getName() + " (" + formatFileSize(file.length()) + ")");
+        
+        return meta;
+    }
+    
+    public static boolean downloadFile(String fileId, String userPhone) {
+        try {
+            // Look for the file in sent directory
+            Path sentDir = Paths.get(BASE_STORAGE_PATH, "sent");
+            if (Files.exists(sentDir)) {
+                try (DirectoryStream<Path> stream = Files.newDirectoryStream(sentDir, fileId + "_*")) {
+                    for (Path filePath : stream) {
+                        String originalName = filePath.getFileName().toString()
+                            .substring(fileId.length() + 1); // Remove fileId_ prefix
+                        
+                        // Create user's download directory
+                        Path downloadDir = Paths.get(BASE_STORAGE_PATH, "received", userPhone);
+                        Files.createDirectories(downloadDir);
+                        
+                        Path targetPath = downloadDir.resolve(originalName);
+                        Files.copy(filePath, targetPath, StandardCopyOption.REPLACE_EXISTING);
+                        
+                        System.out.println("✅ File downloaded to: " + targetPath);
+                        return true;
+                    }
+                }
+            }
+            
+            System.out.println("❌ File not found with ID: " + fileId);
+            return false;
+            
+        } catch (IOException e) {
+            System.err.println("❌ Download failed: " + e.getMessage());
+            return false;
+        }
+    }
+    
+    // Helper method to get file info by ID
+    public static Optional<FileMeta> getFileInfo(String fileId) {
+        try {
+            Path sentDir = Paths.get(BASE_STORAGE_PATH, "sent");
+            if (Files.exists(sentDir)) {
+                try (DirectoryStream<Path> stream = Files.newDirectoryStream(sentDir, fileId + "_*")) {
+                    for (Path filePath : stream) {
+                        String originalName = filePath.getFileName().toString()
+                            .substring(fileId.length() + 1);
+                        
+                        // Use static helper method to get file extension
+                        String fileExtension = getFileExtensionStatic(originalName);
+                        
+                        return Optional.of(new FileMeta(
+                            fileId,
+                            originalName,
+                            filePath.toString(),
+                            Files.size(filePath),
+                            fileExtension,
+                            "unknown",
+                            LocalDateTime.now()
+                        ));
+                    }
+                }
+            }
+        } catch (IOException e) {
+            System.err.println("❌ Error getting file info: " + e.getMessage());
+        }
+        
+        return Optional.empty();
+    }
+    
+    // Instance method for non-static context
+    private String getFileExtension(String fileName) {
+        int lastDot = fileName.lastIndexOf('.');
+        return lastDot > 0 ? fileName.substring(lastDot + 1) : "";
+    }
+    
+    // Static method for static context
+    private static String getFileExtensionStatic(String fileName) {
+        int lastDot = fileName.lastIndexOf('.');
+        return lastDot > 0 ? fileName.substring(lastDot + 1) : "";
+    }
+    
+    private String sanitizeFileName(String fileName) {
+        return fileName.replaceAll("[^a-zA-Z0-9.-]", "_");
+    }
+    
+    public static String formatFileSize(long size) {
+        if (size < 1024) return size + " B";
+        if (size < 1024 * 1024) return String.format("%.1f KB", size / 1024.0);
+        if (size < 1024 * 1024 * 1024) return String.format("%.1f MB", size / (1024.0 * 1024.0));
+        return String.format("%.1f GB", size / (1024.0 * 1024.0 * 1024.0));
+    }
+    
+    public static void cleanupOldFiles(int days) {
+        try {
+            Path storagePath = Paths.get(BASE_STORAGE_PATH);
+            if (!Files.exists(storagePath)) return;
+            
+            LocalDateTime cutoff = LocalDateTime.now().minusDays(days);
+            
+            cleanupDirectory(storagePath.resolve("temp"), cutoff);
+            System.out.println("✅ Cleaned up old temporary files");
+            
+        } catch (IOException e) {
+            System.err.println("❌ Cleanup failed: " + e.getMessage());
+        }
+    }
+    
+    private static void cleanupDirectory(Path directory, LocalDateTime cutoff) throws IOException {
+        if (!Files.exists(directory)) return;
+        
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(directory)) {
+            for (Path filePath : stream) {
+                if (Files.isRegularFile(filePath)) {
+                    FileTime fileTime = Files.getLastModifiedTime(filePath);
+                    LocalDateTime modifiedTime = LocalDateTime.ofInstant(
+                        fileTime.toInstant(), 
+                        java.time.ZoneId.systemDefault()
+                    );
+                    
+                    if (modifiedTime.isBefore(cutoff)) {
+                        Files.delete(filePath);
+                    }
+                }
+            }
+        }
     }
     
     public static class FileMeta {
         private final String fileId;
         private final String originalName;
-        private final String storedPath;
+        private final String filePath;
         private final long fileSize;
         private final String fileType;
-        private final Message.MessageType messageType;
+        private final String ownerPhone;
+        private final LocalDateTime uploadedAt;
         
-        public FileMeta(String fileId, String originalName, String storedPath, 
-                       long fileSize, String fileType, Message.MessageType messageType) {
+        public FileMeta(String fileId, String originalName, String filePath, 
+                       long fileSize, String fileType, String ownerPhone, 
+                       LocalDateTime uploadedAt) {
             this.fileId = fileId;
             this.originalName = originalName;
-            this.storedPath = storedPath;
+            this.filePath = filePath;
             this.fileSize = fileSize;
             this.fileType = fileType;
-            this.messageType = messageType;
+            this.ownerPhone = ownerPhone;
+            this.uploadedAt = uploadedAt;
         }
         
         // Getters
         public String getFileId() { return fileId; }
         public String getOriginalName() { return originalName; }
-        public String getStoredPath() { return storedPath; }
+        public String getFilePath() { return filePath; }
         public long getFileSize() { return fileSize; }
         public String getFileType() { return fileType; }
-        public Message.MessageType getMessageType() { return messageType; }
-    }
-    
-    private static void createStorageDirectories() {
-        try {
-            Files.createDirectories(Paths.get(BASE_STORAGE_PATH));
-            Files.createDirectories(Paths.get(BASE_STORAGE_PATH + "images/"));
-            Files.createDirectories(Paths.get(BASE_STORAGE_PATH + "videos/"));
-            Files.createDirectories(Paths.get(BASE_STORAGE_PATH + "audio/"));
-            Files.createDirectories(Paths.get(BASE_STORAGE_PATH + "documents/"));
-            Files.createDirectories(Paths.get(BASE_STORAGE_PATH + "other/"));
-            
-            System.out.println("✅ File storage directories created");
-        } catch (IOException e) {
-            System.err.println("❌ Failed to create storage directories: " + e.getMessage());
-        }
-    }
-    
-    public static FileMeta saveFile(File file, String senderPhone) throws IOException {
-        // Validate file
-        if (!file.exists()) {
-            throw new IOException("File does not exist: " + file.getAbsolutePath());
-        }
-        
-        if (file.length() > MAX_FILE_SIZE) {
-            throw new IOException("File too large: " + file.length() + " bytes (max: " + MAX_FILE_SIZE + ")");
-        }
-        
-        String fileId = UUID.randomUUID().toString();
-        String originalName = file.getName();
-        String fileExtension = getFileExtension(originalName);
-        Message.MessageType messageType = getMessageTypeFromExtension(fileExtension);
-        String fileType = getFileTypeCategory(fileExtension);
-        
-        // Create destination path
-        String subdirectory = getSubdirectory(fileType);
-        String destFileName = fileId + "_" + sanitizeFileName(originalName);
-        String destPath = BASE_STORAGE_PATH + subdirectory + destFileName;
-        
-        System.out.println("💾 Saving file: " + originalName + " -> " + destPath);
-        
-        // Copy file to storage
-        Files.copy(file.toPath(), Paths.get(destPath), StandardCopyOption.REPLACE_EXISTING);
-        
-        System.out.println("✅ File saved successfully: " + destPath);
-        
-        return new FileMeta(fileId, originalName, destPath, file.length(), fileType, messageType);
-    }
-    
-    public static File getFile(String filePath) {
-        File file = new File(filePath);
-        if (file.exists() && file.isFile()) {
-            return file;
-        }
-        return null;
-    }
-    
-    public static Message.MessageType getMessageTypeFromExtension(String fileExtension) {
-        String extension = fileExtension.toLowerCase();
-        
-        switch (extension) {
-            case "jpg": case "jpeg": case "png": case "gif": case "bmp": case "webp":
-                return Message.MessageType.IMAGE;
-            case "mp4": case "avi": case "mov": case "wmv": case "mkv": case "webm":
-                return Message.MessageType.VIDEO;
-            case "mp3": case "wav": case "ogg": case "flac": case "m4a": case "aac":
-                return Message.MessageType.AUDIO;
-            case "pdf": case "doc": case "docx": case "txt": case "xls": case "xlsx": 
-            case "ppt": case "pptx": case "zip": case "rar":
-                return Message.MessageType.DOCUMENT;
-            default:
-                return Message.MessageType.FILE;
-        }
-    }
-    
-    public static String getSupportedExtensions() {
-        return "Images: jpg, jpeg, png, gif, bmp, webp\n" +
-               "Videos: mp4, avi, mov, wmv, mkv, webm\n" +
-               "Audio: mp3, wav, ogg, flac, m4a, aac\n" +
-               "Documents: pdf, doc, docx, txt, xls, xlsx, ppt, pptx, zip, rar\n" +
-               "Others: any file type";
-    }
-    
-    private static String getFileExtension(String fileName) {
-        int lastDot = fileName.lastIndexOf(".");
-        return lastDot > 0 ? fileName.substring(lastDot + 1) : "";
-    }
-    
-    private static String getFileTypeCategory(String extension) {
-        switch (extension.toLowerCase()) {
-            case "jpg": case "jpeg": case "png": case "gif": case "bmp": case "webp":
-                return "image";
-            case "mp4": case "avi": case "mov": case "wmv": case "mkv": case "webm":
-                return "video";
-            case "mp3": case "wav": case "ogg": case "flac": case "m4a": case "aac":
-                return "audio";
-            case "pdf": case "doc": case "docx": case "txt": case "xls": case "xlsx": 
-            case "ppt": case "pptx": case "zip": case "rar":
-                return "document";
-            default:
-                return "other";
-        }
-    }
-    
-    private static String getSubdirectory(String fileType) {
-        switch (fileType) {
-            case "image": return "images/";
-            case "video": return "videos/";
-            case "audio": return "audio/";
-            case "document": return "documents/";
-            default: return "other/";
-        }
-    }
-    
-    private static String sanitizeFileName(String fileName) {
-        // Remove or replace problematic characters
-        return fileName.replaceAll("[^a-zA-Z0-9.-]", "_");
-    }
-    
-    public static boolean deleteFile(String filePath) {
-        try {
-            boolean deleted = Files.deleteIfExists(Paths.get(filePath));
-            if (deleted) {
-                System.out.println("🗑️ Deleted file: " + filePath);
-            }
-            return deleted;
-        } catch (IOException e) {
-            System.err.println("❌ Error deleting file: " + e.getMessage());
-            return false;
-        }
-    }
-    
-    public static String formatFileSize(long bytes) {
-        if (bytes < 1024) return bytes + " B";
-        if (bytes < 1024 * 1024) return String.format("%.1f KB", bytes / 1024.0);
-        if (bytes < 1024 * 1024 * 1024) return String.format("%.1f MB", bytes / (1024.0 * 1024.0));
-        return String.format("%.1f GB", bytes / (1024.0 * 1024.0 * 1024.0));
-    }
-    
-    public static void cleanupOldFiles(long olderThanDays) {
-        try {
-            Path storagePath = Paths.get(BASE_STORAGE_PATH);
-            if (!Files.exists(storagePath)) return;
-            
-            long cutoffTime = System.currentTimeMillis() - (olderThanDays * 24 * 60 * 60 * 1000);
-            
-            Files.walk(storagePath)
-                .filter(Files::isRegularFile)
-                .filter(path -> {
-                    try {
-                        return Files.getLastModifiedTime(path).toMillis() < cutoffTime;
-                    } catch (IOException e) {
-                        return false;
-                    }
-                })
-                .forEach(path -> {
-                    try {
-                        Files.delete(path);
-                        System.out.println("🧹 Cleaned up old file: " + path.getFileName());
-                    } catch (IOException e) {
-                        System.err.println("Failed to delete old file: " + path);
-                    }
-                });
-                    
-        } catch (IOException e) {
-            System.err.println("Error during file cleanup: " + e.getMessage());
-        }
+        public String getOwnerPhone() { return ownerPhone; }
+        public LocalDateTime getUploadedAt() { return uploadedAt; }
     }
 }

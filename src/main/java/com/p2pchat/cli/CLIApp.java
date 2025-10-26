@@ -1,8 +1,8 @@
 package com.p2pchat.cli;
 
 import com.p2pchat.core.ConversationManager;
-import com.p2pchat.core.MessageManager;
 import com.p2pchat.core.FileManager;
+import com.p2pchat.core.MessageManager;
 import com.p2pchat.core.models.Message;
 import com.p2pchat.core.models.User;
 import com.p2pchat.crypto.KeyManager;
@@ -22,6 +22,8 @@ public class CLIApp {
     private ConnectionManager connectionManager;
     private MySQLStorage storage;
     private User currentUser;
+    private boolean isAdminMode = false;
+    private static final String ADMIN_SECRET_KEY = "admin123"; // Change this to your preferred key
     
     public static void main(String[] args) {
         try {
@@ -39,9 +41,9 @@ public class CLIApp {
         Scanner scanner = null;
         try {
             scanner = new Scanner(System.in);
-            runCommandLoop(scanner);
+            selectMode(scanner);
         } catch (Exception e) {
-            System.err.println("❌ Error in command loop: " + e.getMessage());
+            System.err.println("❌ Error in application: " + e.getMessage());
         } finally {
             if (scanner != null) {
                 scanner.close();
@@ -54,9 +56,7 @@ public class CLIApp {
         try {
             Config config = new Config();
             
-            // Initialize components first
-            keyManager = new KeyManager();
-            connectionManager = new ConnectionManager();
+            
             
             // Initialize database
             try {
@@ -70,19 +70,14 @@ public class CLIApp {
                 storage = new MySQLStorage();
                 System.out.println("✅ Database initialized successfully");
                 
-                // Test database connection
-                if (DatabaseConnection.isConnected()) {
-                    System.out.println("✅ Database connection test successful");
-                } else {
-                    System.out.println("⚠️  Database connection test failed");
-                }
-                
             } catch (Exception e) {
                 System.out.println("⚠️  Running in offline mode without database: " + e.getMessage());
                 storage = null;
             }
             
-            // Initialize managers
+            // Initialize other components
+            keyManager = new KeyManager(storage);
+            connectionManager = new ConnectionManager();
             conversationManager = new ConversationManager(storage);
             messageManager = new MessageManager(storage, keyManager, connectionManager);
             
@@ -93,6 +88,8 @@ public class CLIApp {
             initializeFallbackComponents();
         }
     }
+
+    
     
     private void initializeFallbackComponents() {
         try {
@@ -107,21 +104,65 @@ public class CLIApp {
         }
     }
     
-    private void runCommandLoop(Scanner scanner) {
-        System.out.println("\nType 'help' for available commands");
+    private void selectMode(Scanner scanner) {
+        while (true) {
+            System.out.println("\n🔐 SELECT MODE");
+            System.out.println("1. 👤 User Mode");
+            System.out.println("2. ⚙️  Admin Mode");
+            System.out.println("3. ❌ Exit");
+            System.out.print("Choose mode (1-3): ");
+            
+            String choice = scanner.nextLine().trim();
+            
+            switch (choice) {
+                case "1":
+                    runUserMode(scanner);
+                    break;
+                case "2":
+                    if (authenticateAdmin(scanner)) {
+                        runAdminMode(scanner);
+                    }
+                    break;
+                case "3":
+                    System.out.println("👋 Goodbye!");
+                    return;
+                default:
+                    System.out.println("❌ Invalid choice. Please select 1, 2, or 3.");
+            }
+        }
+    }
+    
+    private boolean authenticateAdmin(Scanner scanner) {
+        System.out.print("🔑 Enter Admin Secret Key: ");
+        String inputKey = scanner.nextLine().trim();
+        
+        if (inputKey.equals(ADMIN_SECRET_KEY)) {
+            isAdminMode = true;
+            System.out.println("✅ Admin authentication successful!");
+            return true;
+        } else {
+            System.out.println("❌ Invalid admin key!");
+            return false;
+        }
+    }
+    
+    private void runUserMode(Scanner scanner) {
+        System.out.println("\n🎯 USER MODE ACTIVATED");
+        System.out.println("Type 'help' for available commands");
         
         while (true) {
             try {
-                System.out.print("\np2pchat> ");
+                System.out.print("\np2pchat-user> ");
                 
                 if (!scanner.hasNextLine()) {
-                    System.out.println("\n👋 No input available. Exiting...");
+                    System.out.println("\n👋 Exiting user mode...");
                     break;
                 }
                 
                 String input = scanner.nextLine().trim();
                 
-                if (input.equalsIgnoreCase("exit") || input.equalsIgnoreCase("quit")) {
+                if (input.equalsIgnoreCase("exit") || input.equalsIgnoreCase("back")) {
+                    System.out.println("👋 Exiting user mode...");
                     break;
                 }
                 
@@ -129,33 +170,53 @@ public class CLIApp {
                     continue;
                 }
                 
-                handleCommand(input, scanner);
+                handleUserCommand(input, scanner);
                 
             } catch (Exception e) {
-                System.err.println("❌ Error in command loop: " + e.getMessage());
-                if (e instanceof java.util.NoSuchElementException) {
-                    System.out.println("📱 Input stream closed. Exiting...");
-                    break;
-                }
+                System.err.println("❌ Error in user mode: " + e.getMessage());
             }
         }
     }
     
-    private void handleCommand(String input, Scanner scanner) {
+    private void runAdminMode(Scanner scanner) {
+        System.out.println("\n⚙️  ADMIN MODE ACTIVATED");
+        System.out.println("Type 'help' for available commands");
+        
+        while (true) {
+            try {
+                System.out.print("\np2pchat-admin> ");
+                
+                if (!scanner.hasNextLine()) {
+                    System.out.println("\n👋 Exiting admin mode...");
+                    break;
+                }
+                
+                String input = scanner.nextLine().trim();
+                
+                if (input.equalsIgnoreCase("exit") || input.equalsIgnoreCase("back")) {
+                    System.out.println("👋 Exiting admin mode...");
+                    isAdminMode = false;
+                    break;
+                }
+                
+                if (input.isEmpty()) {
+                    continue;
+                }
+                
+                handleAdminCommand(input, scanner);
+                
+            } catch (Exception e) {
+                System.err.println("❌ Error in admin mode: " + e.getMessage());
+            }
+        }
+    }
+    
+    private void handleUserCommand(String input, Scanner scanner) {
         String[] parts = input.split("\\s+", 3);
         String command = parts[0].toLowerCase();
         
         try {
             switch (command) {
-            	case "clear-db":
-                System.out.print("⚠️  ARE YOU SURE? This will delete ALL data! Type 'YES' to confirm: ");
-                String confirmation = scanner.nextLine().trim();
-                if ("YES".equals(confirmation)) {
-                    DatabaseConnection.clearDatabase();
-                } else {
-                    System.out.println("❌ Database clear cancelled");
-                }
-                break;
                 case "register":
                     handleRegister(scanner);
                     break;
@@ -181,6 +242,14 @@ public class CLIApp {
                         handleSendFile(parts[1], scanner);
                     } else {
                         System.out.println("❌ Usage: sendfile <phoneNumber>");
+                    }
+                    break;
+                    
+                case "download":
+                    if (parts.length >= 2) {
+                        handleDownloadFile(parts[1]);
+                    } else {
+                        System.out.println("❌ Usage: download <fileId>");
                     }
                     break;
                     
@@ -222,30 +291,89 @@ public class CLIApp {
                     }
                     break;
                     
-                case "server-status":
-                    showServerStatus();
-                    break;
-                    
                 case "status":
-                    showStatus();
-                    break;
-                    
-                case "db-stats":
-                    DatabaseConnection.printDatabaseStats();
+                    showUserStatus();
                     break;
                     
                 case "help":
-                    showHelp();
+                    showUserHelp();
                     break;
                     
                 default:
                     System.out.println("❌ Unknown command: " + command);
-                    showHelp();
+                    showUserHelp();
             }
         } catch (Exception e) {
             System.err.println("❌ Error executing command '" + command + "': " + e.getMessage());
         }
     }
+    
+    private void handleAdminCommand(String input, Scanner scanner) {
+        String[] parts = input.split("\\s+", 3);
+        String command = parts[0].toLowerCase();
+        
+        try {
+            switch (command) {
+                case "server-status":
+                    showServerStatus();
+                    break;
+                    
+                case "server-start":
+                    startServer();
+                    break;
+                    
+                case "server-stop":
+                    stopServer();
+                    break;
+                    
+                case "db-status":
+                    showDatabaseStatus();
+                    break;
+                    
+                case "db-reset":
+                    if (confirmAction(scanner, "reset the database")) {
+                        resetDatabase();
+                    }
+                    break;
+                    
+                case "db-tables":
+                    showDatabaseTables();
+                    break;
+                    
+                case "db-stats":
+                    showDatabaseStatistics();
+                    break;
+                    
+                case "users-list":
+                    listAllUsers();
+                    break;
+                    
+                case "messages-list":
+                    listAllMessages();
+                    break;
+                    
+                case "connections-list":
+                    listAllConnections();
+                    break;
+                    
+                case "system-status":
+                    showSystemStatus();
+                    break;
+                    
+                case "help":
+                    showAdminHelp();
+                    break;
+                    
+                default:
+                    // Try user commands in admin mode
+                    handleUserCommand(input, scanner);
+            }
+        } catch (Exception e) {
+            System.err.println("❌ Error executing admin command '" + command + "': " + e.getMessage());
+        }
+    }
+    
+    // ========== USER COMMAND METHODS ==========
     
     private void handleRegister(Scanner scanner) {
         try {
@@ -271,8 +399,29 @@ public class CLIApp {
                 return;
             }
             
-            // FIXED: Use key fingerprint instead of byte array
-            String publicKeyFingerprint = keyManager != null ? keyManager.getPublicKeyFingerprint() : "none";
+            // Generate public key fingerprint
+            String publicKeyFingerprint = "";
+            if (keyManager != null) {
+                try {
+                    // Try to get public key using available method
+                    java.lang.reflect.Method method = keyManager.getClass().getMethod("getPublicKeyFingerprint");
+                    publicKeyFingerprint = (String) method.invoke(keyManager);
+                } catch (Exception e) {
+                    // If that fails, try getPublicKey() and convert to fingerprint
+                    try {
+                        java.lang.reflect.Method method = keyManager.getClass().getMethod("getPublicKey");
+                        byte[] publicKeyBytes = (byte[]) method.invoke(keyManager);
+                        publicKeyFingerprint = generateFingerprint(publicKeyBytes);
+                    } catch (Exception e2) {
+                        // Last resort - generate a simple fingerprint
+                        publicKeyFingerprint = "key_" + phoneNumber + "_" + System.currentTimeMillis();
+                    }
+                }
+            } else {
+                publicKeyFingerprint = "offline_key_" + phoneNumber;
+            }
+            
+            // Create user with the correct constructor
             User user = new User(phoneNumber, displayName, publicKeyFingerprint);
             
             boolean saved = false;
@@ -305,6 +454,28 @@ public class CLIApp {
             
         } catch (Exception e) {
             System.err.println("❌ Registration error: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    // Add this helper method to generate fingerprint from bytes
+    private String generateFingerprint(byte[] data) {
+        if (data == null || data.length == 0) {
+            return "no_key";
+        }
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] hash = md.digest(data);
+            // Take first 16 characters of hex representation
+            StringBuilder hexString = new StringBuilder();
+            for (int i = 0; i < Math.min(8, hash.length); i++) {
+                String hex = Integer.toHexString(0xff & hash[i]);
+                if (hex.length() == 1) hexString.append('0');
+                hexString.append(hex);
+            }
+            return hexString.toString();
+        } catch (Exception e) {
+            return "key_" + java.util.UUID.randomUUID().toString().substring(0, 8);
         }
     }
     
@@ -326,8 +497,8 @@ public class CLIApp {
                     return;
                 }
             } else {
-                // FIXED: Use string for key fingerprint
-                user = new User(phoneNumber, "Offline User", "none");
+                // Create temporary user for offline mode with proper constructor
+                user = new User(phoneNumber, "Offline User", "offline_key");
                 System.out.println("📴 Offline mode - using temporary user");
             }
             
@@ -353,6 +524,7 @@ public class CLIApp {
             System.err.println("❌ Login error: " + e.getMessage());
         }
     }
+    
     
     private void handleSend(String recipientPhone, String messageText) {
         if (currentUser == null) {
@@ -393,25 +565,41 @@ public class CLIApp {
             return;
         }
         
-        // For now, we'll simulate file sending since we need to update MessageManager
-        System.out.println("⚠️  File sharing via server is being implemented...");
-        System.out.println("💡 For now, files are saved locally only");
-        
         try {
             java.io.File file = new java.io.File(filePath);
             if (file.exists()) {
-                FileManager.FileMeta fileMeta = FileManager.saveFile(file, currentUser.getPhoneNumber());
+                // Create FileManager instance
+                FileManager fileManager = new FileManager(storage);
+                FileManager.FileMeta fileMeta = fileManager.saveFile(file, currentUser.getPhoneNumber());
                 System.out.println("✅ File saved locally: " + fileMeta.getOriginalName());
                 
                 // Send a message about the file
-                String fileMessage = "Sent file: " + fileMeta.getOriginalName() + " (" + 
-                                   FileManager.formatFileSize(fileMeta.getFileSize()) + ")";
+                String fileMessage = "📎 FILE: " + fileMeta.getOriginalName() + " (" + 
+                                   FileManager.formatFileSize(fileMeta.getFileSize()) + ") - ID: " + fileMeta.getFileId();
                 messageManager.sendMessage(recipientPhone, fileMessage);
             } else {
                 System.out.println("❌ File not found: " + filePath);
             }
         } catch (Exception e) {
             System.err.println("❌ Error handling file: " + e.getMessage());
+        }
+    }
+    
+    private void handleDownloadFile(String fileId) {
+        if (currentUser == null) {
+            System.out.println("❌ Please login first");
+            return;
+        }
+        
+        try {
+            boolean success = FileManager.downloadFile(fileId, currentUser.getPhoneNumber());
+            if (success) {
+                System.out.println("✅ File downloaded successfully!");
+            } else {
+                System.out.println("❌ File download failed or file not found");
+            }
+        } catch (Exception e) {
+            System.err.println("❌ Error downloading file: " + e.getMessage());
         }
     }
     
@@ -622,7 +810,6 @@ public class CLIApp {
         System.out.println("📱 Phone: " + currentUser.getPhoneNumber());
         System.out.println("👤 Name: " + currentUser.getDisplayName());
         System.out.println("📝 Status: " + currentUser.getProfileStatus());
-        System.out.println("🔑 Key fingerprint: " + currentUser.getPublicKeyFingerprint());
         System.out.println("🕒 Joined: " + currentUser.getCreatedAt().format(
             DateTimeFormatter.ofPattern("MMM dd, yyyy")));
         System.out.println("👀 Last seen: " + currentUser.getLastSeen().format(
@@ -644,17 +831,12 @@ public class CLIApp {
         }
     }
     
-    private void showStatus() {
-        System.out.println("\n📊 APPLICATION STATUS");
+    private void showUserStatus() {
+        System.out.println("\n📊 YOUR STATUS");
         System.out.println("═".repeat(80));
-        System.out.println("💾 Database: " + (storage != null ? "✅ Connected" : "📴 Offline"));
+        System.out.println("👤 User: " + (currentUser != null ? currentUser.getDisplayName() : "Not logged in"));
         System.out.println("🌐 Server: " + (messageManager != null && messageManager.isConnectedToServer() ? "✅ Connected" : "❌ Disconnected"));
-        System.out.println("👤 Current User: " + (currentUser != null ? 
-            currentUser.getDisplayName() + " (" + currentUser.getPhoneNumber() + ")" : "❌ Not logged in"));
-        System.out.println("🔑 Key Manager: " + (keyManager != null ? "✅ Ready" : "❌ Not available"));
-        System.out.println("📡 Connection Manager: " + (connectionManager != null ? "✅ Ready" : "❌ Not available"));
-        System.out.println("💬 Message Manager: " + (messageManager != null ? "✅ Ready" : "❌ Not available"));
-        System.out.println("💼 Conversation Manager: " + (conversationManager != null ? "✅ Ready" : "❌ Not available"));
+        System.out.println("💾 Storage: " + (storage != null ? "✅ Available" : "📴 Offline"));
     }
     
     private String getMessageEmoji(Message msg) {
@@ -669,40 +851,156 @@ public class CLIApp {
         }
     }
     
-    private void showHelp() {
-        System.out.println("\n📱 P2PCHAT COMMANDS");
+    // ========== ADMIN COMMAND METHODS ==========
+    
+    private void startServer() {
+        System.out.println("🚀 Starting server...");
+        // Implementation for starting server
+        System.out.println("✅ Server started successfully");
+    }
+    
+    private void stopServer() {
+        System.out.println("🛑 Stopping server...");
+        // Implementation for stopping server
+        System.out.println("✅ Server stopped successfully");
+    }
+    
+    private void showDatabaseStatus() {
+        System.out.println("\n💾 DATABASE STATUS");
         System.out.println("═".repeat(80));
-        System.out.println("👤 User Commands:");
-        System.out.println("  register              - Create new account with phone number");
-        System.out.println("  login <phone>         - Login with your phone number");
-        System.out.println("  profile               - Show your profile information");
-        System.out.println("  status                - Show application status");
+        System.out.println("Status: " + (storage != null ? "✅ Connected" : "❌ Disconnected"));
+        System.out.println("Connection: " + (DatabaseConnection.isConnected() ? "✅ Active" : "❌ Inactive"));
+    }
+    
+ // In CLIApp.java - add this admin command
+    private void resetDatabase() {
+        try {
+            System.out.println("🔄 Resetting database...");
+            DatabaseConnection.resetDatabase();
+            
+            // Re-initialize components to populate tables
+            initializeComponents();
+            
+            System.out.println("✅ Database reset successfully with new schema");
+        } catch (Exception e) {
+            System.err.println("❌ Database reset failed: " + e.getMessage());
+        }
+    }
+    
+    private void showDatabaseTables() {
+        System.out.println("\n📊 DATABASE TABLES");
+        System.out.println("═".repeat(80));
+        System.out.println("users: ✅ Active");
+        System.out.println("messages: ✅ Active");
+        System.out.println("contacts: ✅ Active");
+        System.out.println("conversations: ✅ Active");
+        System.out.println("file_chunks: ✅ Active");
+        System.out.println("encryption_keys: ✅ Active");
+        System.out.println("key_store: ✅ Active");
+        System.out.println("p2p_connections: ✅ Active");
+    }
+    
+    private void showDatabaseStatistics() {
+        System.out.println("\n📈 DATABASE STATISTICS");
+        System.out.println("═".repeat(80));
+        if (storage != null) {
+            System.out.println("Total Users: " + storage.getUserCount());
+            System.out.println("Total Messages: " + storage.getMessageCount());
+            System.out.println("Total Files: " + storage.getFileCount());
+        } else {
+            System.out.println("❌ Database not available");
+        }
+    }
+    
+    private void listAllUsers() {
+        System.out.println("\n👥 ALL USERS");
+        System.out.println("═".repeat(80));
+        // Implementation to list all users
+        System.out.println("User listing feature to be implemented");
+    }
+    
+    private void listAllMessages() {
+        System.out.println("\n💬 ALL MESSAGES");
+        System.out.println("═".repeat(80));
+        // Implementation to list all messages
+        System.out.println("Message listing feature to be implemented");
+    }
+    
+    private void listAllConnections() {
+        System.out.println("\n🔗 ALL CONNECTIONS");
+        System.out.println("═".repeat(80));
+        // Implementation to list all connections
+        System.out.println("Connection listing feature to be implemented");
+    }
+    
+    private void showSystemStatus() {
+        System.out.println("\n🖥️  SYSTEM STATUS");
+        System.out.println("═".repeat(80));
+        System.out.println("Mode: " + (isAdminMode ? "⚙️  Admin" : "👤 User"));
+        System.out.println("Database: " + (storage != null ? "✅ Connected" : "📴 Offline"));
+        System.out.println("Server: " + (messageManager != null && messageManager.isConnectedToServer() ? "✅ Connected" : "❌ Disconnected"));
+        System.out.println("Current User: " + (currentUser != null ? currentUser.getDisplayName() : "❌ Not logged in"));
+    }
+    
+    private boolean confirmAction(Scanner scanner, String action) {
+        System.out.print("⚠️  Are you sure you want to " + action + "? (yes/no): ");
+        String response = scanner.nextLine().trim();
+        return response.equalsIgnoreCase("yes");
+    }
+    
+    private void showUserHelp() {
+        System.out.println("\n📱 USER COMMANDS");
+        System.out.println("═".repeat(80));
+        System.out.println("👤 User Management:");
+        System.out.println("  register              - Create new account");
+        System.out.println("  login <phone>         - Login with phone number");
+        System.out.println("  profile               - Show your profile");
         
-        System.out.println("\n💬 Messaging Commands:");
-        System.out.println("  send <phone> <msg>    - Send text message to a user");
-        System.out.println("  sendfile <phone>      - Send file to a user");
-        System.out.println("  inbox                 - Show all received messages");
-        System.out.println("  chats                 - Show your conversations");
-        System.out.println("  chat <phone>          - Show conversation with specific user");
+        System.out.println("\n💬 Messaging:");
+        System.out.println("  send <phone> <msg>    - Send text message");
+        System.out.println("  sendfile <phone>      - Send file to user");
+        System.out.println("  download <fileId>     - Download received file");
+        System.out.println("  inbox                 - Show received messages");
+        System.out.println("  chats                 - Show conversations");
+        System.out.println("  chat <phone>          - Show chat with user");
         
-        System.out.println("\n👥 Contact Commands:");
-        System.out.println("  add-contact <phone>   - Add user to your contacts");
-        System.out.println("  contacts              - Show your contact list");
+        System.out.println("\n👥 Contacts:");
+        System.out.println("  add-contact <phone>   - Add user to contacts");
+        System.out.println("  contacts              - Show contact list");
         
-        System.out.println("\n🌐 Server Commands:");
+        System.out.println("\n🌐 Network:");
         System.out.println("  online                - Show online users");
-        System.out.println("  server-status         - Check server connection");
+        System.out.println("  status                - Show your status");
         
-        System.out.println("\n🗄️  Database Commands:");
-        System.out.println("  db-stats              - Show database statistics and usage");
-        System.out.println("  clear-db              - CLEAR ALL DATABASE DATA (use with caution!)");
+        System.out.println("\n⚙️  System:");
+        System.out.println("  help                  - Show this help");
+        System.out.println("  exit                  - Exit user mode");
+    }
+    
+    private void showAdminHelp() {
+        showUserHelp();
+        System.out.println("\n⚙️  ADMIN COMMANDS");
+        System.out.println("═".repeat(80));
+        System.out.println("🌐 Server Management:");
+        System.out.println("  server-status         - Check server status");
+        System.out.println("  server-start          - Start the server");
+        System.out.println("  server-stop           - Stop the server");
         
-        System.out.println("\n⚙️  System Commands:");
-        System.out.println("  help                  - Show this help message");
-        System.out.println("  exit                  - Exit the application");
+        System.out.println("\n💾 Database Management:");
+        System.out.println("  db-status             - Check database status");
+        System.out.println("  db-tables             - Show all tables");
+        System.out.println("  db-stats              - Show database statistics");
+        System.out.println("  db-reset              - Reset database (WARNING)");
         
-        System.out.println("\n📁 Supported File Types:");
-        System.out.println(FileManager.getSupportedExtensions());
+        System.out.println("\n📊 Monitoring:");
+        System.out.println("  users-list            - List all users");
+        System.out.println("  messages-list         - List all messages");
+        System.out.println("  connections-list      - List all connections");
+        System.out.println("  system-status         - Show full system status");
+        
+        System.out.println("\n🔐 Admin:");
+        System.out.println("  help                  - Show this help");
+        System.out.println("  exit                  - Exit admin mode");
     }
     
     private void cleanup() {

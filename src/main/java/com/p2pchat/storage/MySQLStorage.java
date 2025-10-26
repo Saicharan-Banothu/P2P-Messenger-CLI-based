@@ -13,6 +13,8 @@ public class MySQLStorage {
     private final ContactDAO contactDAO;
     private final ConversationDAO conversationDAO;
     private final FileDAO fileDAO;
+    private final KeyDAO keyDAO;
+    // private final ConnectionDAO connectionDAO; // Comment out for now
     
     public MySQLStorage() {
         this.userDAO = new UserDAO();
@@ -20,32 +22,21 @@ public class MySQLStorage {
         this.contactDAO = new ContactDAO();
         this.conversationDAO = new ConversationDAO();
         this.fileDAO = new FileDAO();
+        this.keyDAO = new KeyDAO();
+        // this.connectionDAO = new ConnectionDAO(); // Comment out for now
     }
     
-    // User methods - SIMPLIFIED (no need to set timestamps here since User constructor handles it)
+    // User methods
     public boolean saveUser(User user) {
-        // The User constructor already sets proper timestamps and default status
-        // So we don't need to set them here anymore
         return userDAO.save(user);
     }
     
     public Optional<User> getUser(String phoneNumber) {
-        Optional<User> user = userDAO.findByPhoneNumber(phoneNumber);
-        
-        // Update last seen when retrieving user (for login/active usage)
-        if (user.isPresent()) {
-            updateUserLastSeen(phoneNumber);
-        }
-        
-        return user;
+        return userDAO.findByPhoneNumber(phoneNumber);
     }
     
     public void updateUserLastSeen(String phoneNumber) {
         userDAO.updateLastSeen(phoneNumber);
-    }
-    
-    public boolean updateProfileStatus(String phoneNumber, String status) {
-        return userDAO.updateProfileStatus(phoneNumber, status);
     }
     
     // Contact methods
@@ -89,8 +80,54 @@ public class MySQLStorage {
     
     // File methods
     public boolean saveFileMetadata(String fileId, String fileName, String filePath, 
-                                   long fileSize, String fileType, String ownerPhone) {
-        return fileDAO.saveFileMetadata(fileId, fileName, filePath, fileSize, fileType, ownerPhone);
+            long fileSize, String fileType, String ownerPhone) {
+return fileDAO.saveFileMetadata(fileId, fileName, filePath, fileSize, fileType, ownerPhone);
+}
+    public List<FileDAO.FileMetadata> getFilesByOwner(String ownerPhone) {
+        return fileDAO.getFilesByOwner(ownerPhone);
+    }
+    
+    public boolean markFileAsDelivered(String fileId) {
+        return fileDAO.markFileAsDelivered(fileId);
+    }
+   
+    
+    // Key management methods
+ // In MySQLStorage.java, update the saveEncryptionKey call to match the DAO
+    public boolean saveEncryptionKey(String keyId, String userPhone, byte[] publicKey, 
+                                   byte[] privateKey, byte[] symmetricKey) {
+        return keyDAO.saveEncryptionKey(keyId, userPhone, publicKey, privateKey, symmetricKey);
+    }
+    
+    public Optional<KeyDAO.EncryptionKey> getEncryptionKey(String userPhone) {
+        return keyDAO.findByUserPhone(userPhone);
+    }
+    
+    // Connection methods (commented out for now)
+    /*
+    public boolean saveP2PConnection(String connectionId, String user1Phone, String user2Phone,
+                                    String connectionType, String localAddress, String remoteAddress,
+                                    int localPort, int remotePort, byte[] sessionKey) {
+        return connectionDAO.saveConnection(connectionId, user1Phone, user2Phone, connectionType,
+                                          localAddress, remoteAddress, localPort, remotePort, sessionKey);
+    }
+    
+    public List<ConnectionDAO.P2PConnection> getActiveConnections(String userPhone) {
+        return connectionDAO.findActiveConnections(userPhone);
+    }
+    */
+    
+    // Admin methods
+    public int getUserCount() {
+        return userDAO.getUserCount();
+    }
+    
+    public int getMessageCount() {
+        return messageDAO.getMessageCount();
+    }
+    
+    public int getFileCount() {
+        return fileDAO.getFileCount();
     }
     
     public void close() {

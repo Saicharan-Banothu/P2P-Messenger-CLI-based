@@ -4,369 +4,474 @@ import com.p2pchat.core.models.Message;
 import com.p2pchat.core.models.User;
 import com.p2pchat.crypto.KeyManager;
 import com.p2pchat.net.ConnectionManager;
-import com.p2pchat.net.PeerServer;
 import com.p2pchat.storage.MySQLStorage;
-import com.p2pchat.util.Serializer;
-import java.io.*;
-import java.net.*;
 import java.time.LocalDateTime;
-import java.util.List;
-import java.util.ArrayList;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.*;
+import java.util.concurrent.*;
 
 public class MessageManager {
-    private final MySQLStorage storage;
-    private final KeyManager keyManager;
-    private final ConnectionManager connectionManager;
+    private MySQLStorage storage;
+    private KeyManager keyManager;
+    private ConnectionManager connectionManager;
     private User currentUser;
-    private Socket serverSocket;
-    private BufferedReader serverInput;
-    private PrintWriter serverOutput;
     private boolean connectedToServer = false;
-    private PeerServer peerServer;
-    private final String SERVER_HOST = "localhost";
-    private final int SERVER_PORT = 8080;
-    private final int PEER_PORT = 9090;
     
-    // P2P connections cache
-    private final ConcurrentHashMap<String, Socket> peerConnections = new ConcurrentHashMap<>();
+    // In-memory storage for quick access
+    private Map<String, List<Message>> conversationCache = new ConcurrentHashMap<>();
+    private List<Message> inboxCache = new CopyOnWriteArrayList<>();
     
     public MessageManager(MySQLStorage storage, KeyManager keyManager, ConnectionManager connectionManager) {
         this.storage = storage;
         this.keyManager = keyManager;
         this.connectionManager = connectionManager;
-        connectToServer();
-        startPeerServer();
-    }
-    
-    private void connectToServer() {
-        try {
-            serverSocket = new Socket(SERVER_HOST, SERVER_PORT);
-            serverInput = new BufferedReader(new InputStreamReader(serverSocket.getInputStream()));
-            serverOutput = new PrintWriter(serverSocket.getOutputStream(), true);
-            connectedToServer = true;
-            
-            startServerListener();
-            System.out.println("✅ Connected to chat server at " + SERVER_HOST + ":" + SERVER_PORT);
-            
-        } catch (IOException e) {
-            System.err.println("❌ Failed to connect to server: " + e.getMessage());
-            System.err.println("💡 Make sure the server is running on " + SERVER_HOST + ":" + SERVER_PORT);
-            connectedToServer = false;
-        }
-    }
-    
-    private void startServerListener() {
-        Thread listenerThread = new Thread(() -> {
-            try {
-                String serverMessage;
-                while (connectedToServer && (serverMessage = serverInput.readLine()) != null) {
-                    handleServerMessage(serverMessage);
-                }
-            } catch (IOException e) {
-                if (connectedToServer) {
-                    System.err.println("❌ Server connection lost: " + e.getMessage());
-                    connectedToServer = false;
-                }
-            }
-        });
-        listenerThread.setDaemon(true);
-        listenerThread.start();
-    }
-    
-    private void startPeerServer() {
-        try {
-            this.peerServer = new PeerServer(PEER_PORT, this);
-            new Thread(() -> peerServer.start()).start();
-            System.out.println("✅ P2P server started on port " + PEER_PORT);
-        } catch (Exception e) {
-            System.err.println("❌ Failed to start P2P server: " + e.getMessage());
-        }
-    }
-    
-    private void handleServerMessage(String message) {
-        System.out.println("📡 Server: " + message);
         
-        String[] parts = message.split(":", 2);
-        String command = parts[0];
+        initializeMessageManager();
+    }
+    
+    private void initializeMessageManager() {
+        System.out.println("🌐 Initializing Message Manager...");
         
-        switch (command) {
-            case "MESSAGE":
-                if (parts.length >= 2) {
-                    String[] messageParts = parts[1].split(":", 2);
-                    if (messageParts.length >= 2) {
-                        String fromPhone = messageParts[0];
-                        String content = messageParts[1];
-                        handleIncomingMessage(fromPhone, content);
-                    }
-                }
-                break;
-                
-            case "REGISTERED":
-                System.out.println("✅ Registered with server successfully");
-                break;
-                
-            case "DELIVERED":
-                if (parts.length >= 2) {
-                    System.out.println("✅ Message delivered to: " + parts[1]);
-                }
-                break;
-                
-            case "QUEUED":
-                if (parts.length >= 2) {
-                    System.out.println("⚠️  User offline, message queued for: " + parts[1]);
-                }
-                break;
-                
-            case "ONLINE_USERS":
-                if (parts.length >= 2) {
-                    String[] users = parts[1].split(",");
-                    System.out.println("👥 Online users (" + users.length + "):");
-                    for (String user : users) {
-                        if (!user.isEmpty() && !user.equals("null")) {
-                            System.out.println("   📱 " + user);
-                        }
-                    }
-                }
-                break;
-                
-            case "PONG":
-                // Server ping response
-                break;
-        }
-    }
-    
-    private void handleIncomingMessage(String fromPhone, String content) {
-        System.out.println("\n💬 NEW MESSAGE from " + fromPhone + ": " + content);
-        
-        // Save to local database
-        if (storage != null && currentUser != null) {
-            try {
-                Message message = Message.createTextMessage(fromPhone, currentUser.getPhoneNumber(), content);
-                Long conversationId = storage.findOrCreateConversation(fromPhone, currentUser.getPhoneNumber());
-                message.setConversationId(conversationId);
-                storage.saveMessage(message);
-                storage.updateConversation(conversationId, content, LocalDateTime.now());
-            } catch (Exception e) {
-                System.err.println("❌ Error saving incoming message: " + e.getMessage());
-            }
-        }
-    }
-    
-    // Enhanced sendMessage with P2P fallback
-    public boolean sendMessage(String recipientPhone, String text) {
-        if (currentUser == null) {
-            System.out.println("❌ Please login first");
-            return false;
-        }
-        
-        try {
-            // Try P2P first if recipient is online
-            if (tryP2PMessage(recipientPhone, text)) {
-                System.out.println("✅ Message sent via P2P");
-                saveMessageLocally(currentUser.getPhoneNumber(), recipientPhone, text, true);
-                return true;
-            }
-            
-            // Fallback to server
-            if (!connectedToServer) {
-                System.out.println("❌ Not connected to server and P2P failed");
-                return false;
-            }
-            
-            serverOutput.println("SEND:" + recipientPhone + ":" + text);
-            
-            saveMessageLocally(currentUser.getPhoneNumber(), recipientPhone, text, false);
-            System.out.println("📤 Message sent via server");
-            return true;
-            
-        } catch (Exception e) {
-            System.err.println("❌ Error sending message: " + e.getMessage());
-            return false;
-        }
-    }
-    
-    private boolean tryP2PMessage(String recipientPhone, String text) {
-        try {
-            // In real implementation, you'd use rendezvous server or known peer addresses
-            // For now, we'll simulate P2P with local connections
-            Socket peerSocket = getPeerConnection(recipientPhone);
-            if (peerSocket != null) {
-                PrintWriter peerOut = new PrintWriter(peerSocket.getOutputStream(), true);
-                
-                // Create JSON message
-                P2PMessage p2pMessage = new P2PMessage(
-                    currentUser.getPhoneNumber(),
-                    recipientPhone,
-                    text,
-                    System.currentTimeMillis(),
-                    keyManager.getPublicKeyFingerprint()
-                );
-                
-                String jsonMessage = Serializer.toJson(p2pMessage);
-                peerOut.println("P2P_MSG:" + jsonMessage);
-                return true;
-            }
-        } catch (Exception e) {
-            System.err.println("❌ P2P message failed: " + e.getMessage());
-        }
-        return false;
-    }
-    
-    private Socket getPeerConnection(String peerPhone) {
-        return peerConnections.computeIfAbsent(peerPhone, phone -> {
-            try {
-                // Try to connect to peer's P2P server
-                Socket socket = new Socket("localhost", PEER_PORT);
-                new Thread(new PeerMessageHandler(socket)).start();
-                return socket;
-            } catch (Exception e) {
-                return null;
-            }
-        });
-    }
-    
-    private void saveMessageLocally(String sender, String receiver, String text, boolean p2p) {
+        // Test database connection
         if (storage != null) {
-            try {
-                Message message = Message.createTextMessage(sender, receiver, text);
-                Long conversationId = storage.findOrCreateConversation(sender, receiver);
-                message.setConversationId(conversationId);
-                if (p2p) {
-                    message.setStatus(Message.MessageStatus.DELIVERED);
-                }
-                storage.saveMessage(message);
-                storage.updateConversation(conversationId, text, LocalDateTime.now());
-            } catch (Exception e) {
-                System.err.println("❌ Error saving message locally: " + e.getMessage());
-            }
-        }
-    }
-    
-    public void handleIncomingP2PMessage(P2PMessage p2pMessage) {
-        System.out.println("\n💬 P2P MESSAGE from " + p2pMessage.sender + ": " + p2pMessage.content);
-        saveMessageLocally(p2pMessage.sender, currentUser.getPhoneNumber(), p2pMessage.content, true);
-    }
-    
-    public void registerWithServer() {
-        if (currentUser != null && connectedToServer && serverOutput != null) {
-            try {
-                serverOutput.println("REGISTER:" + currentUser.getPhoneNumber() + ":" + keyManager.getPublicKeyFingerprint());
-                System.out.println("📡 Registering with server as: " + currentUser.getPhoneNumber());
-                
-                // Wait a bit for server response
-                Thread.sleep(500);
-            } catch (Exception e) {
-                System.err.println("❌ Error registering with server: " + e.getMessage());
-            }
-        }
-    }
-    
-    public void requestOnlineUsers() {
-        if (connectedToServer) {
-            serverOutput.println("ONLINE_USERS");
-            System.out.println("🔍 Requesting online users list...");
+            System.out.println("✅ Database storage available");
         } else {
-            System.out.println("❌ Not connected to server");
+            System.out.println("⚠️  Running without database storage");
         }
+        
+        // Initialize key manager
+        if (keyManager != null) {
+            keyManager.initialize();
+            System.out.println("✅ Key manager initialized");
+        }
+        
+        // Initialize connection to server and start peer server
+        if (connectionManager != null) {
+            if (connectionManager.isConnected()) {
+                connectedToServer = true;
+                System.out.println("✅ Connected to chat server");
+                
+                // Start peer server for P2P connections
+                connectionManager.startPeerServer();
+                System.out.println("✅ P2P server ready on port " + connectionManager.getPeerPort());
+            } else {
+                System.err.println("❌ Not connected to chat server");
+            }
+        }
+        
+        System.out.println("✅ Message Manager initialized successfully");
     }
     
     public void setCurrentUser(User user) {
         this.currentUser = user;
-        if (connectedToServer && user != null) {
-            // Small delay to ensure server is ready
-            new Thread(() -> {
-                try {
-                    Thread.sleep(1000);
-                    registerWithServer();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
+        if (user != null && connectionManager != null) {
+            // Register user with server
+            connectionManager.registerUser(user.getPhoneNumber());
+            System.out.println("📡 Registered user with server: " + user.getPhoneNumber());
+        }
+    }
+    
+    public boolean sendMessage(String recipientPhone, String messageText) {
+        if (currentUser == null) {
+            System.err.println("❌ Please login first before sending messages");
+            return false;
+        }
+        
+        if (!isValidPhoneNumber(recipientPhone)) {
+            System.err.println("❌ Invalid recipient phone number: " + recipientPhone);
+            return false;
+        }
+        
+        if (messageText == null || messageText.trim().isEmpty()) {
+            System.err.println("❌ Message cannot be empty");
+            return false;
+        }
+        
+        try {
+            // Create message object
+            Message message = new Message(
+                UUID.randomUUID().toString(),
+                currentUser.getPhoneNumber(),
+                recipientPhone,
+                messageText,
+                Message.MessageType.TEXT,
+                Message.MessageStatus.SENT,
+                LocalDateTime.now()
+            );
+            
+            // Save to database if available
+            if (storage != null) {
+                boolean saved = storage.saveMessage(message);
+                if (saved) {
+                    System.out.println("✅ Message saved to database");
+                } else {
+                    System.err.println("❌ Failed to save message to database");
                 }
-            }).start();
+                
+                // Update conversation
+                updateConversation(currentUser.getPhoneNumber(), recipientPhone, messageText, LocalDateTime.now());
+            }
+            
+            // Send via server connection
+            if (connectionManager != null && connectionManager.isConnected()) {
+                boolean sent = connectionManager.sendMessage(recipientPhone, messageText);
+                if (sent) {
+                    System.out.println("✅ Message sent via server");
+                    message.setStatus(Message.MessageStatus.DELIVERED);
+                } else {
+                    System.err.println("❌ Failed to send message via server");
+                    message.setStatus(Message.MessageStatus.FAILED);
+                }
+            } else {
+                System.out.println("⚠️  Message queued for delivery (offline mode)");
+                message.setStatus(Message.MessageStatus.PENDING);
+            }
+            
+            // Update cache
+            updateMessageCache(message);
+            
+            return true;
+            
+        } catch (Exception e) {
+            System.err.println("❌ Error sending message: " + e.getMessage());
+            e.printStackTrace();
+            return false;
+        }
+    }
+    
+    public boolean sendFileMessage(String recipientPhone, String filePath, String fileName, long fileSize) {
+        if (currentUser == null) {
+            System.err.println("❌ Please login first before sending files");
+            return false;
+        }
+        
+        if (!isValidPhoneNumber(recipientPhone)) {
+            System.err.println("❌ Invalid recipient phone number: " + recipientPhone);
+            return false;
+        }
+        
+        try {
+            // Create file message
+            String fileId = UUID.randomUUID().toString();
+            String fileMessage = "FILE:" + fileName + ":" + fileSize + ":" + fileId;
+            
+            // Create message object for file
+            Message message = new Message(
+                UUID.randomUUID().toString(),
+                currentUser.getPhoneNumber(),
+                recipientPhone,
+                fileMessage,
+                Message.MessageType.FILE,
+                Message.MessageStatus.SENT,
+                LocalDateTime.now()
+            );
+            
+            // Set file properties
+            message.setFileName(fileName);
+            message.setFileSize(fileSize);
+            message.setFilePath(filePath);
+            message.setFileId(fileId);
+            
+            // Save to database if available
+            if (storage != null) {
+                boolean saved = storage.saveMessage(message);
+                if (saved) {
+                    System.out.println("✅ File message saved to database");
+                } else {
+                    System.err.println("❌ Failed to save file message to database");
+                }
+                
+                // Update conversation
+                updateConversation(currentUser.getPhoneNumber(), recipientPhone, 
+                                 "Sent file: " + fileName, LocalDateTime.now());
+            }
+            
+            // Send via server connection
+            if (connectionManager != null && connectionManager.isConnected()) {
+                boolean sent = connectionManager.sendFileMessage(recipientPhone, fileName, fileSize, fileId);
+                if (sent) {
+                    System.out.println("✅ File message sent via server");
+                    message.setStatus(Message.MessageStatus.DELIVERED);
+                } else {
+                    System.err.println("❌ Failed to send file message via server");
+                    message.setStatus(Message.MessageStatus.FAILED);
+                }
+            } else {
+                System.out.println("⚠️  File message queued for delivery (offline mode)");
+                message.setStatus(Message.MessageStatus.PENDING);
+            }
+            
+            // Update cache
+            updateMessageCache(message);
+            
+            return true;
+            
+        } catch (Exception e) {
+            System.err.println("❌ Error sending file message: " + e.getMessage());
+            e.printStackTrace();
+            return false;
         }
     }
     
     public List<Message> getInbox() {
-        if (currentUser == null) return new ArrayList<>();
-        try {
-            return storage != null ? storage.getMessagesByReceiver(currentUser.getPhoneNumber()) : new ArrayList<>();
-        } catch (Exception e) {
-            System.err.println("❌ Error getting inbox: " + e.getMessage());
+        // Return cached inbox if available
+        if (!inboxCache.isEmpty()) {
+            return new ArrayList<>(inboxCache);
+        }
+        
+        // Load from database if storage is available
+        if (storage != null && currentUser != null) {
+            try {
+                List<Message> messages = storage.getMessagesByReceiver(currentUser.getPhoneNumber());
+                inboxCache.clear();
+                inboxCache.addAll(messages);
+                System.out.println("✅ Loaded " + messages.size() + " messages from database");
+                return messages;
+            } catch (Exception e) {
+                System.err.println("❌ Error loading inbox: " + e.getMessage());
+            }
+        }
+        
+        return new ArrayList<>();
+    }
+    
+    public List<Message> getConversation(String otherUserPhone) {
+        if (currentUser == null) {
+            System.err.println("❌ Please login first");
             return new ArrayList<>();
         }
+        
+        if (!isValidPhoneNumber(otherUserPhone)) {
+            System.err.println("❌ Invalid phone number: " + otherUserPhone);
+            return new ArrayList<>();
+        }
+        
+        String cacheKey = getConversationCacheKey(currentUser.getPhoneNumber(), otherUserPhone);
+        
+        // Return cached conversation if available
+        if (conversationCache.containsKey(cacheKey)) {
+            return new ArrayList<>(conversationCache.get(cacheKey));
+        }
+        
+        // Load from database if storage is available
+        if (storage != null) {
+            try {
+                List<Message> messages = storage.getConversationMessages(currentUser.getPhoneNumber(), otherUserPhone);
+                conversationCache.put(cacheKey, new CopyOnWriteArrayList<>(messages));
+                System.out.println("✅ Loaded " + messages.size() + " messages for conversation with " + otherUserPhone);
+                return messages;
+            } catch (Exception e) {
+                System.err.println("❌ Error loading conversation: " + e.getMessage());
+            }
+        }
+        
+        return new ArrayList<>();
+    }
+    
+    public void requestOnlineUsers() {
+        if (connectionManager != null && connectionManager.isConnected()) {
+            connectionManager.requestOnlineUsers();
+            System.out.println("📡 Requesting online users from server...");
+        } else {
+            System.err.println("❌ Not connected to server");
+        }
+    }
+    
+    public List<String> getOnlineUsers() {
+        // This would typically come from server response
+        // For now, return empty list - server will push updates via ConnectionManager
+        return new ArrayList<>();
     }
     
     public boolean isConnectedToServer() {
-        return connectedToServer;
+        return connectedToServer && connectionManager != null && connectionManager.isConnected();
     }
     
     public void disconnectFromServer() {
-        connectedToServer = false;
-        try {
-            if (serverSocket != null) serverSocket.close();
-        } catch (IOException e) {
-            // Ignore during disconnect
+        if (connectionManager != null) {
+            connectionManager.disconnect();
+            connectedToServer = false;
+            System.out.println("✅ Disconnected from server");
         }
     }
     
-    // P2P Message class for JSON serialization
-    public static class P2PMessage {
-        public String sender;
-        public String receiver;
-        public String content;
-        public long timestamp;
-        public String keyFingerprint;
-        
-        public P2PMessage(String sender, String receiver, String content, long timestamp, String keyFingerprint) {
-            this.sender = sender;
-            this.receiver = receiver;
-            this.content = content;
-            this.timestamp = timestamp;
-            this.keyFingerprint = keyFingerprint;
+    public void markMessageAsRead(String messageId) {
+        if (storage != null) {
+            boolean updated = storage.updateMessageStatus(messageId, Message.MessageStatus.READ);
+            if (updated) {
+                System.out.println("✅ Message marked as read: " + messageId);
+                // Update cache
+                updateMessageStatusInCache(messageId, Message.MessageStatus.READ);
+            }
         }
-        
-        // Default constructor for JSON deserialization
-        public P2PMessage() {}
     }
     
-    private class PeerMessageHandler implements Runnable {
-        private final Socket socket;
-        private BufferedReader input;
-        
-        public PeerMessageHandler(Socket socket) {
-            this.socket = socket;
+    public void markMessageAsDelivered(String messageId) {
+        if (storage != null) {
+            boolean updated = storage.updateMessageStatus(messageId, Message.MessageStatus.DELIVERED);
+            if (updated) {
+                System.out.println("✅ Message marked as delivered: " + messageId);
+                // Update cache
+                updateMessageStatusInCache(messageId, Message.MessageStatus.DELIVERED);
+            }
         }
-        private void saveP2PConnection(String peerPhone, String host, int port) {
+    }
+    
+    // Utility methods
+    private boolean isValidPhoneNumber(String phoneNumber) {
+        return phoneNumber != null && phoneNumber.matches("[6-9][0-9]{9}") && phoneNumber.length() == 10;
+    }
+    
+    private String getConversationCacheKey(String user1, String user2) {
+        // Create consistent cache key regardless of order
+        return user1.compareTo(user2) < 0 ? user1 + "_" + user2 : user2 + "_" + user1;
+    }
+    
+    private void updateConversation(String user1, String user2, String lastMessage, LocalDateTime lastMessageTime) {
+        if (storage != null) {
             try {
-                // Save P2P connection to database
-                String sql = "INSERT INTO p2p_connections (user_phone, peer_phone, peer_host, peer_port, is_active) " +
-                            "VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE " +
-                            "last_connected = CURRENT_TIMESTAMP, connection_count = connection_count + 1, is_active = TRUE";
-                
-                // This would require database access
-                System.out.println("🔗 Saving P2P connection: " + currentUser.getPhoneNumber() + " → " + peerPhone);
-                System.out.println("📍 Peer address: " + host + ":" + port);
-                
+                Long conversationId = storage.findOrCreateConversation(user1, user2);
+                storage.updateConversation(conversationId, lastMessage, lastMessageTime);
             } catch (Exception e) {
-                System.err.println("❌ Error saving P2P connection: " + e.getMessage());
+                System.err.println("❌ Error updating conversation: " + e.getMessage());
+            }
+        }
+    }
+    
+    private void updateMessageCache(Message message) {
+        // Update inbox cache
+        if (message.getReceiverPhone().equals(currentUser.getPhoneNumber())) {
+            inboxCache.add(message);
+        }
+        
+        // Update conversation cache
+        String cacheKey = getConversationCacheKey(message.getSenderPhone(), message.getReceiverPhone());
+        List<Message> conversation = conversationCache.getOrDefault(cacheKey, new CopyOnWriteArrayList<>());
+        conversation.add(message);
+        conversationCache.put(cacheKey, conversation);
+    }
+    
+    private void updateMessageStatusInCache(String messageId, Message.MessageStatus status) {
+        // Update in inbox cache
+        for (Message message : inboxCache) {
+            if (message.getId().equals(messageId)) {
+                message.setStatus(status);
+                break;
             }
         }
         
-        @Override
-        public void run() {
-            try {
-                input = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-                String message;
-                while ((message = input.readLine()) != null) {
-                    if (message.startsWith("P2P_MSG:")) {
-                        String json = message.substring(8);
-                        P2PMessage p2pMessage = Serializer.fromJson(json, P2PMessage.class);
-                        handleIncomingP2PMessage(p2pMessage);
-                    }
+        // Update in conversation caches
+        for (List<Message> conversation : conversationCache.values()) {
+            for (Message message : conversation) {
+                if (message.getId().equals(messageId)) {
+                    message.setStatus(status);
+                    break;
                 }
-            } catch (Exception e) {
-                System.err.println("❌ Peer message handler error: " + e.getMessage());
             }
         }
+    }
+    
+    // Method to handle incoming messages from ConnectionManager
+    public void handleIncomingMessage(String fromUser, String content) {
+        if (currentUser == null) {
+            System.err.println("❌ Cannot handle incoming message: no current user");
+            return;
+        }
+        
+        try {
+            Message.MessageType messageType = content.startsWith("FILE:") ? 
+                Message.MessageType.FILE : Message.MessageType.TEXT;
+            
+            Message message = new Message(
+                UUID.randomUUID().toString(),
+                fromUser,
+                currentUser.getPhoneNumber(),
+                content,
+                messageType,
+                Message.MessageStatus.DELIVERED,
+                LocalDateTime.now()
+            );
+            
+            // Handle file messages
+            if (messageType == Message.MessageType.FILE) {
+                String[] fileParts = content.split(":");
+                if (fileParts.length >= 4) {
+                    message.setFileName(fileParts[1]);
+                    message.setFileSize(Long.parseLong(fileParts[2]));
+                    message.setFileId(fileParts[3]);
+                }
+            }
+            
+            // Save to database
+            if (storage != null) {
+                storage.saveMessage(message);
+                updateConversation(fromUser, currentUser.getPhoneNumber(), content, LocalDateTime.now());
+            }
+            
+            // Update cache
+            updateMessageCache(message);
+            
+            System.out.println("✅ Received message from " + fromUser + ": " + 
+                             (content.length() > 50 ? content.substring(0, 50) + "..." : content));
+            
+        } catch (Exception e) {
+            System.err.println("❌ Error handling incoming message: " + e.getMessage());
+        }
+    }
+    
+    // Method to clear cache (useful for testing or memory management)
+    public void clearCache() {
+        conversationCache.clear();
+        inboxCache.clear();
+        System.out.println("✅ Message cache cleared");
+    }
+    
+    // Method to get message statistics
+    public Map<String, Object> getMessageStatistics() {
+        Map<String, Object> stats = new HashMap<>();
+        
+        if (storage != null && currentUser != null) {
+            try {
+                List<Message> allMessages = storage.getMessagesByReceiver(currentUser.getPhoneNumber());
+                
+                stats.put("totalMessages", allMessages.size());
+                stats.put("unreadMessages", allMessages.stream()
+                    .filter(m -> m.getStatus() == Message.MessageStatus.DELIVERED)
+                    .count());
+                stats.put("sentMessages", allMessages.stream()
+                    .filter(m -> m.getSenderPhone().equals(currentUser.getPhoneNumber()))
+                    .count());
+                stats.put("receivedMessages", allMessages.stream()
+                    .filter(m -> m.getReceiverPhone().equals(currentUser.getPhoneNumber()))
+                    .count());
+                    
+            } catch (Exception e) {
+                System.err.println("❌ Error getting message statistics: " + e.getMessage());
+            }
+        }
+        
+        return stats;
+    }
+    
+    // Method to search messages
+    public List<Message> searchMessages(String query) {
+        List<Message> results = new ArrayList<>();
+        
+        if (query == null || query.trim().isEmpty()) {
+            return results;
+        }
+        
+        String searchQuery = query.toLowerCase().trim();
+        
+        // Search in cached messages
+        for (Message message : inboxCache) {
+            if (message.getContent().toLowerCase().contains(searchQuery) ||
+                message.getSenderPhone().contains(searchQuery) ||
+                (message.getFileName() != null && message.getFileName().toLowerCase().contains(searchQuery))) {
+                results.add(message);
+            }
+        }
+        
+        System.out.println("✅ Found " + results.size() + " messages matching: " + query);
+        return results;
     }
 }
