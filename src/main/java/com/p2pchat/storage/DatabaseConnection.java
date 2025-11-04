@@ -9,6 +9,16 @@ public class DatabaseConnection {
     private static String password;
     private static boolean initialized = false;
     
+    // Load MySQL driver at class loading time
+    static {
+        try {
+            Class.forName("com.mysql.cj.jdbc.Driver");
+            System.out.println("✅ MySQL JDBC Driver loaded successfully");
+        } catch (ClassNotFoundException e) {
+            System.err.println("❌ MySQL JDBC Driver not found");
+        }
+    }
+    
     public static void initialize(String jdbcUrl, String dbUsername, String dbPassword) {
         url = jdbcUrl;
         username = dbUsername;
@@ -16,9 +26,13 @@ public class DatabaseConnection {
         
         try {
             System.out.println("🔗 Setting up database...");
+            System.out.println("📝 URL: " + url);
+            System.out.println("👤 User: " + username);
             
-            // Get a connection and setup tables
+            // Test connection first
             try (Connection conn = getFreshConnection()) {
+                System.out.println("✅ Database connection test successful");
+                
                 // Reset and recreate tables to ensure correct schema
                 resetAndCreateTables(conn);
                 initialized = true;
@@ -28,10 +42,12 @@ public class DatabaseConnection {
             
         } catch (Exception e) {
             System.out.println("❌ Database setup failed: " + e.getMessage());
+            System.out.println("💡 Running in offline mode without database");
             initialized = false;
         }
     }
     
+    // Rest of your existing DatabaseConnection code remains the same...
     private static Connection getFreshConnection() throws SQLException {
         Properties props = new Properties();
         props.setProperty("user", username);
@@ -39,6 +55,7 @@ public class DatabaseConnection {
         props.setProperty("useSSL", "false");
         props.setProperty("serverTimezone", "UTC");
         props.setProperty("autoReconnect", "true");
+        props.setProperty("allowPublicKeyRetrieval", "true");
         
         return DriverManager.getConnection(url, props);
     }
