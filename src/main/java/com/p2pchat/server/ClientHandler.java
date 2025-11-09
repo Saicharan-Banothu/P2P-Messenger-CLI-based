@@ -37,22 +37,19 @@ public class ClientHandler implements Runnable {
     
     private void handleMessage(String message) {
         try {
-            String[] parts = message.split(":", 3);
-            String command = parts[0];
-            
-            switch (command) {
-                case "REGISTER":
+            if (message.startsWith("IDENTIFY:")) {
+                // Match the protocol from ServerApp's inner class
+                String[] parts = message.split(":");
+                if (parts.length >= 2) {
+                    userPhone = parts[1];
+                    ServerApp.registerUser(userPhone, this);
+                    sendMessage("REGISTERED:" + userPhone);
+                    System.out.println("✅ User registered: " + userPhone);
+                }
+            } else if (message.startsWith("SEND:")) {
+                if (userPhone != null) {
+                    String[] parts = message.split(":", 3);
                     if (parts.length >= 3) {
-                        userPhone = parts[1];
-                        String keyFingerprint = parts[2];
-                        ServerApp.registerUser(userPhone, keyFingerprint, this);
-                        sendMessage("REGISTERED:" + userPhone);
-                        System.out.println("✅ User registered: " + userPhone);
-                    }
-                    break;
-                    
-                case "SEND":
-                    if (parts.length >= 3 && userPhone != null) {
                         String toPhone = parts[1];
                         String content = parts[2];
                         boolean delivered = ServerApp.sendMessageToUser(userPhone, toPhone, content);
@@ -62,19 +59,14 @@ public class ClientHandler implements Runnable {
                             sendMessage("QUEUED:" + toPhone);
                         }
                     }
-                    break;
-                    
-                case "ONLINE_USERS":
-                    List<String> onlineUsers = ServerApp.getOnlineUsers();
-                    sendMessage("ONLINE_USERS:" + String.join(",", onlineUsers));
-                    break;
-                    
-                case "PING":
-                    sendMessage("PONG");
-                    break;
-                    
-                default:
-                    System.out.println("❌ Unknown command from " + userPhone + ": " + command);
+                }
+            } else if (message.startsWith("GET_ONLINE_USERS")) {
+                List<String> onlineUsers = ServerApp.getOnlineUsers();
+                sendMessage("ONLINE_USERS:" + String.join(",", onlineUsers));
+            } else if (message.startsWith("PING")) {
+                sendMessage("PONG");
+            } else {
+                System.out.println("❌ Unknown command from " + userPhone + ": " + message);
             }
         } catch (Exception e) {
             System.err.println("❌ Error handling message from " + userPhone + ": " + e.getMessage());
