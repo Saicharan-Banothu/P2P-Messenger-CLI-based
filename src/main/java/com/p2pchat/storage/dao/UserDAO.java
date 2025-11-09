@@ -8,7 +8,6 @@ import java.util.Optional;
 public class UserDAO {
     
     public boolean save(User user) {
-        // FIXED: Using public_key_fingerprint NOT public_key
         String sql = "INSERT INTO users (phone_number, display_name, public_key_fingerprint, created_at, last_seen, profile_status) " +
                     "VALUES (?, ?, ?, ?, ?, ?)";
         
@@ -38,7 +37,6 @@ public class UserDAO {
     }
     
     public Optional<User> findByPhoneNumber(String phoneNumber) {
-        // FIXED: Using public_key_fingerprint NOT public_key
         String sql = "SELECT phone_number, display_name, public_key_fingerprint, created_at, last_seen, profile_status " +
                     "FROM users WHERE phone_number = ?";
         
@@ -52,7 +50,7 @@ public class UserDAO {
                 User user = new User(
                     rs.getString("phone_number"),
                     rs.getString("display_name"),
-                    rs.getString("public_key_fingerprint"), // CORRECT column name
+                    rs.getString("public_key_fingerprint"),
                     rs.getTimestamp("created_at").toLocalDateTime(),
                     rs.getTimestamp("last_seen").toLocalDateTime(),
                     rs.getString("profile_status")
@@ -118,5 +116,11 @@ public class UserDAO {
     
     public boolean userExists(String phoneNumber) {
         return findByPhoneNumber(phoneNumber).isPresent();
+    }
+    
+    // Added method that uses LocalDateTime
+    public LocalDateTime getLastSeen(String phoneNumber) {
+        Optional<User> user = findByPhoneNumber(phoneNumber);
+        return user.map(User::getLastSeen).orElse(LocalDateTime.MIN);
     }
 }

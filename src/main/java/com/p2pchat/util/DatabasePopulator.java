@@ -1,6 +1,5 @@
 package com.p2pchat.util;
 
-import com.p2pchat.crypto.KeyManager;
 import com.p2pchat.storage.DatabaseConnection;
 import com.p2pchat.storage.MySQLStorage;
 import java.sql.*;
@@ -12,13 +11,8 @@ public class DatabasePopulator {
         System.out.println("🔄 Populating encryption tables...");
         
         try {
-            // Populate encryption_keys table
             populateEncryptionKeys(storage);
-            
-            // Populate key_store table  
             populateKeyStore(storage);
-            
-            // Populate p2p_connections table
             populateP2PConnections(storage);
             
             System.out.println("✅ Encryption tables populated successfully");
@@ -30,12 +24,10 @@ public class DatabasePopulator {
     
     private static void populateEncryptionKeys(MySQLStorage storage) {
         try (Connection conn = DatabaseConnection.getConnection()) {
-            // Check if table is empty
             String checkSql = "SELECT COUNT(*) FROM encryption_keys";
             try (Statement stmt = conn.createStatement();
                  ResultSet rs = stmt.executeQuery(checkSql)) {
                 if (rs.next() && rs.getInt(1) == 0) {
-                    // Table is empty, insert sample data
                     String insertSql = "INSERT INTO encryption_keys (id, user_phone, public_key, key_type) " +
                                      "VALUES (?, ?, ?, ?)";
                     try (PreparedStatement pstmt = conn.prepareStatement(insertSql)) {

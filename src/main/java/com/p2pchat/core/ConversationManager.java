@@ -14,4 +14,17 @@ public class ConversationManager {
     public void setCurrentUser(User user) {
         this.currentUser = user;
     }
+    
+    // Added methods to use the fields
+    public MySQLStorage getStorage() {
+        return storage;
+    }
+    
+    public User getCurrentUser() {
+        return currentUser;
+    }
+    
+    public boolean isUserSet() {
+        return currentUser != null;
+    }
 }

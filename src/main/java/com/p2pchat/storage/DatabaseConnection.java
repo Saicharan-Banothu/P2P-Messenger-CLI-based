@@ -9,7 +9,6 @@ public class DatabaseConnection {
     private static String password;
     private static boolean initialized = false;
     
-    // Load MySQL driver at class loading time
     static {
         try {
             Class.forName("com.mysql.cj.jdbc.Driver");
@@ -29,13 +28,10 @@ public class DatabaseConnection {
             System.out.println("📝 URL: " + url);
             System.out.println("👤 User: " + username);
             
-            // Test connection first
             try (Connection conn = getFreshConnection()) {
                 System.out.println("✅ Database connection test successful");
-                
-                // Reset and recreate tables to ensure correct schema
                 resetAndCreateTables(conn);
-                initialized = true;
+                initialized = true; // Now this is used
             }
             
             System.out.println("✅ Database setup completed successfully");
@@ -47,7 +43,6 @@ public class DatabaseConnection {
         }
     }
     
-    // Rest of your existing DatabaseConnection code remains the same...
     private static Connection getFreshConnection() throws SQLException {
         Properties props = new Properties();
         props.setProperty("user", username);
@@ -63,7 +58,6 @@ public class DatabaseConnection {
     private static void resetAndCreateTables(Connection conn) throws SQLException {
         System.out.println("🔄 Creating database tables with SIMPLIFIED schema...");
         
-        // Drop tables in correct order
         String[] dropTables = {
             "DROP TABLE IF EXISTS messages",
             "DROP TABLE IF EXISTS file_chunks",
@@ -85,9 +79,7 @@ public class DatabaseConnection {
             }
         }
         
-        // Create tables with SIMPLIFIED file_chunks table (NO CHUNK DATA)
         String[] tables = {
-            // Users table
             "CREATE TABLE users (" +
                 "phone_number VARCHAR(10) PRIMARY KEY, " +
                 "display_name VARCHAR(100) NOT NULL, " +
@@ -96,7 +88,6 @@ public class DatabaseConnection {
                 "last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP, " +
                 "profile_status VARCHAR(200) DEFAULT 'Hey there! I am using P2PChat')",
             
-            // Contacts table
             "CREATE TABLE contacts (" +
                 "owner_phone VARCHAR(10) NOT NULL, " +
                 "contact_phone VARCHAR(10) NOT NULL, " +
@@ -105,7 +96,6 @@ public class DatabaseConnection {
                 "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, " +
                 "PRIMARY KEY(owner_phone, contact_phone))",
             
-            // Conversations table
             "CREATE TABLE conversations (" +
                 "id BIGINT AUTO_INCREMENT PRIMARY KEY, " +
                 "user1_phone VARCHAR(10) NOT NULL, " +
@@ -115,7 +105,6 @@ public class DatabaseConnection {
                 "unread_count INT DEFAULT 0, " +
                 "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
             
-            // Messages table
             "CREATE TABLE messages (" +
                 "id VARCHAR(36) PRIMARY KEY, " +
                 "conversation_id BIGINT, " +
@@ -132,7 +121,6 @@ public class DatabaseConnection {
                 "status VARCHAR(20) DEFAULT 'SENT', " +
                 "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
             
-            // SIMPLIFIED File metadata table - NO CHUNK DATA
             "CREATE TABLE file_chunks (" +
                 "id BIGINT AUTO_INCREMENT PRIMARY KEY, " +
                 "file_id VARCHAR(36) NOT NULL, " +
@@ -145,7 +133,6 @@ public class DatabaseConnection {
                 "uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, " +
                 "is_delivered BOOLEAN DEFAULT FALSE)",
             
-            // Encryption keys table
             "CREATE TABLE encryption_keys (" +
                 "id VARCHAR(36) PRIMARY KEY, " +
                 "user_phone VARCHAR(10) NOT NULL, " +
@@ -156,7 +143,6 @@ public class DatabaseConnection {
                 "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, " +
                 "is_active BOOLEAN DEFAULT TRUE)",
             
-            // Key store table
             "CREATE TABLE key_store (" +
                 "id VARCHAR(36) PRIMARY KEY, " +
                 "key_owner VARCHAR(10) NOT NULL, " +
@@ -167,7 +153,6 @@ public class DatabaseConnection {
                 "expires_at TIMESTAMP, " +
                 "is_valid BOOLEAN DEFAULT TRUE)",
             
-            // P2P connections table
             "CREATE TABLE p2p_connections (" +
                 "id VARCHAR(36) PRIMARY KEY, " +
                 "user1_phone VARCHAR(10) NOT NULL, " +
@@ -236,10 +221,14 @@ public class DatabaseConnection {
         // No need to close static connection since we create fresh ones
     }
     
-    // Method for admin to reset database
     public static void resetDatabase() throws SQLException {
         try (Connection conn = getFreshConnection()) {
             resetAndCreateTables(conn);
         }
+    }
+    
+    // Added method to use initialized field
+    public static boolean isInitialized() {
+        return initialized;
     }
 }

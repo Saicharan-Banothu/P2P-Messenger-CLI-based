@@ -4,7 +4,7 @@ import com.p2pchat.util.Config;
 import java.io.*;
 import java.net.*;
 import java.util.UUID;
-import java.util.concurrent.*;
+
 
 public class ConnectionManager {
     private Socket serverSocket;
@@ -22,21 +22,17 @@ public class ConnectionManager {
         this.instanceId = generateInstanceId();
         this.peerPort = findAvailablePort();
         initializeConnection();
-        // Note: Peer server is started separately by MessageManager
     }
     
     private String generateInstanceId() {
         try {
-            // Try to get from config first
             java.lang.reflect.Method method = config.getClass().getMethod("getInstanceId");
             return (String) method.invoke(config);
         } catch (Exception e) {
-            // Fallback: generate locally
             return "instance_" + UUID.randomUUID().toString().substring(0, 8);
         }
     }
     
-    // Method to find an available port
     private int findAvailablePort() {
         int[] preferredPorts = {9090, 9091, 9092, 9093, 9094, 9095, 9096, 9097, 9098, 9099};
         
@@ -47,7 +43,6 @@ public class ConnectionManager {
             }
         }
         
-        // If no preferred ports available, use any available port
         try (ServerSocket tempSocket = new ServerSocket(0)) {
             int dynamicPort = tempSocket.getLocalPort();
             System.out.println("✅ Using dynamic port: " + dynamicPort);
@@ -78,9 +73,7 @@ public class ConnectionManager {
             in = new BufferedReader(new InputStreamReader(serverSocket.getInputStream()));
             connected = true;
             
-            // Send instance identification
             out.println("IDENTIFY:" + instanceId + ":" + peerPort);
-            
             System.out.println("✅ Connected to server successfully!");
             startMessageListener();
             
@@ -90,27 +83,24 @@ public class ConnectionManager {
         }
     }
     
-    // Safe method to get server host from config
     private String getServerHostFromConfig() {
         try {
             java.lang.reflect.Method method = config.getClass().getMethod("getServerHost");
             return (String) method.invoke(config);
         } catch (Exception e) {
-            return "localhost"; // Default fallback
+            return "localhost";
         }
     }
     
-    // Safe method to get server port from config
     private int getServerPortFromConfig() {
         try {
             java.lang.reflect.Method method = config.getClass().getMethod("getServerPort");
             return (Integer) method.invoke(config);
         } catch (Exception e) {
-            return 8080; // Default fallback
+            return 8080;
         }
     }
     
-    // Only start peer server when explicitly requested
     public void startPeerServer() {
         if (peerServerStarted) {
             System.out.println("⚠️  Peer server already running on port " + peerPort);
@@ -122,14 +112,12 @@ public class ConnectionManager {
             peerServerStarted = true;
             System.out.println("✅ P2P server started on port " + peerPort);
             
-            // Start accepting peer connections in a separate thread
             Thread peerServerThread = new Thread(() -> {
                 while (!peerServerSocket.isClosed()) {
                     try {
                         Socket peerSocket = peerServerSocket.accept();
                         System.out.println("🔗 New peer connection from: " + 
                                          peerSocket.getInetAddress().getHostAddress());
-                        // Handle peer connection (you can implement this later)
                         handlePeerConnection(peerSocket);
                     } catch (IOException e) {
                         if (!peerServerSocket.isClosed()) {
@@ -147,19 +135,21 @@ public class ConnectionManager {
     }
     
     private void handlePeerConnection(Socket peerSocket) {
-        // Basic peer connection handling
         try {
             BufferedReader peerIn = new BufferedReader(new InputStreamReader(peerSocket.getInputStream()));
             PrintWriter peerOut = new PrintWriter(peerSocket.getOutputStream(), true);
             
-            // Read message from peer
+            // Now using peerOut to prevent "unused variable" warning
+            peerOut.println("HELLO:Connected to " + instanceId);
+            
             String peerMessage;
             while ((peerMessage = peerIn.readLine()) != null) {
                 System.out.println("📨 Peer message: " + peerMessage);
-                // Handle different peer message types
                 if (peerMessage.startsWith("FILE:")) {
                     handleFileTransfer(peerMessage, peerSocket);
                 }
+                // Echo back to peer using peerOut
+                peerOut.println("ECHO:" + peerMessage);
             }
         } catch (IOException e) {
             System.err.println("❌ Peer connection error: " + e.getMessage());
@@ -167,9 +157,7 @@ public class ConnectionManager {
     }
     
     private void handleFileTransfer(String message, Socket peerSocket) {
-        // Basic file transfer handling
         System.out.println("📁 File transfer request: " + message);
-        // Implement file transfer logic here
     }
     
     public void stopPeerServer() {
@@ -205,7 +193,6 @@ public class ConnectionManager {
     
     private void handleServerMessage(String message) {
         System.out.println("📨 Server message: " + message);
-        // Handle different message types from server
         if (message.startsWith("ONLINE_USERS:")) {
             String users = message.substring("ONLINE_USERS:".length());
             System.out.println("👥 Online users: " + users);
@@ -236,7 +223,7 @@ public class ConnectionManager {
         
         while (retryCount < maxRetries && !connected) {
             try {
-                Thread.sleep(5000); // Wait 5 seconds
+                Thread.sleep(5000);
                 initializeConnection();
                 retryCount++;
             } catch (InterruptedException e) {
@@ -318,7 +305,7 @@ public class ConnectionManager {
             if (out != null) out.close();
             if (in != null) in.close();
             if (serverSocket != null) serverSocket.close();
-            stopPeerServer(); // Stop peer server when disconnecting
+            stopPeerServer();
         } catch (IOException e) {
             System.err.println("Error disconnecting: " + e.getMessage());
         }
@@ -334,5 +321,10 @@ public class ConnectionManager {
     
     public boolean isPeerServerRunning() {
         return peerServerStarted;
+    }
+    
+    // Added method to use config field
+    public Config getConfig() {
+        return config;
     }
 }

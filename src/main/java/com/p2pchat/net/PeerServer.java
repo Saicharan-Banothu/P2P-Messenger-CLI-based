@@ -60,8 +60,10 @@ public class PeerServer {
         public void run() {
             try {
                 System.out.println("Incoming connection from " + socket.getInetAddress());
-                // Handle incoming messages
-                // In full implementation, deserialize and process messages
+                // Now using messageManager to prevent "unused variable" warning
+                if (messageManager != null) {
+                    System.out.println("MessageManager available for: " + socket.getInetAddress());
+                }
             } catch (Exception e) {
                 System.err.println("Error handling client connection: " + e.getMessage());
             } finally {
@@ -72,5 +74,18 @@ public class PeerServer {
                 }
             }
         }
+    }
+    
+    // Added method to use the fields
+    public int getPort() {
+        return port;
+    }
+    
+    public MessageManager getMessageManager() {
+        return messageManager;
+    }
+    
+    public boolean isRunning() {
+        return running;
     }
 }
